@@ -63,8 +63,10 @@ function quality(s) {
   if (s.status === 'reference') return { cls: 'q-good', text: 'Riferimento' };
   if (s.rms == null) return { cls: 'q-bad', text: 'Da registrare' };
   const mm = (s.rms * 1000).toFixed(0), ov = Math.round(s.overlap * 100);
-  const good = s.rms <= 0.015 && s.overlap >= 0.3;
-  const ok = s.rms <= 0.03 && s.overlap >= 0.15;
+  // soglie proporzionate al voxel di lavoro: con vegetazione reale (FLS, 5 cm) lo scarto tipico è 4-6 cm
+  const v = s.voxel || 0.05;
+  const good = s.rms <= Math.max(0.015, 0.6 * v) && s.overlap >= 0.3;
+  const ok = s.rms <= Math.max(0.03, 1.4 * v) && s.overlap >= 0.15;
   const pre = s.status === 'registered' ? '' : 'Proposta: ';
   return { cls: good ? 'q-good' : ok ? 'q-warn' : 'q-bad', text: `${pre}scarto ${mm} mm · sovrapp. ${ov}%` };
 }
@@ -173,15 +175,38 @@ $('#fileInput').onchange = $('#dirInput').onchange = async (e) => {
   const isFls = (f) => /\.fls[\\/]/i.test(f.webkitRelativePath || '') || /^(Main|ScanDataStream\d+|MirrorIndex[01]\.hls)$/.test(f.name);
   const fls = files.filter(isFls);
   for (const f of files) if (!isFls(f) && !/\.(jpg|jpeg|png|sha|sig)$/i.test(f.name) && f.name !== 'SHA256SUM') await importFile(f);
-  if (fls.length) {
-    const entries = fls.map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
+  const inFolder = fls.filter((f) => /\.fls[\\/]/i.test(f.webkitRelativePath || ''));
+  if (inFolder.length) {
+    // cartella intera (PC / browser che supportano la scelta della cartella)
+    const entries = inFolder.map((f) => ({ path: f.webkitRelativePath, file: f }));
     const roots = [...new Set(entries.map((x) => (/(.*?[^/\\]+\.fls)[\\/]/i.exec(x.path) || [])[1]).filter(Boolean))];
-    const label = roots.length === 1 ? roots[0].split(/[\\/]/).pop() : roots.length ? `${roots.length} scansioni FLS` : 'scansione FLS';
+    const label = roots.length === 1 ? roots[0].split(/[\\/]/).pop() : `${roots.length} scansioni FLS`;
     await importFile({ name: label }, entries);
   }
+  const loose = fls.filter((f) => !inFolder.includes(f));
+  if (loose.length) await addFlsParts(loose);
 };
 
-async function importFile(file, flsEntries) {
+// Sul tablet il selettore di Android sceglie un file alla volta e non la cartella: i pezzi della
+// scansione FLS si raccolgono qui finché ci sono tutti, poi l'importazione parte da sola.
+const flsBag = new Map();
+const FLS_NEEDED = ['Main', 'MirrorIndex0.hls', 'MirrorIndex1.hls', 'ScanDataStream0'];
+async function addFlsParts(files) {
+  for (const f of files) {
+    if (f.name === 'Main' && flsBag.has('Main')) flsBag.clear(); // un nuovo Main = una nuova scansione
+    flsBag.set(f.name, f);
+  }
+  const missing = FLS_NEEDED.filter((n) => !flsBag.has(n));
+  if (missing.length) {
+    toast(`Scansione FLS: ho ${[...flsBag.keys()].join(', ')}. Mancano ${missing.join(', ')} (premi di nuovo «Cartella FLS»). Main è nella cartella .fls, gli altri in Scans/1.`);
+    return;
+  }
+  const entries = [...flsBag.values()].map((f) => ({ path: f.name, file: f }));
+  const ok = await importFile({ name: 'scansione FLS' }, entries, true);
+  if (ok) flsBag.clear();
+}
+
+async function importFile(file, flsEntries, flsPartial = false) {
   if (aligning) endAlign(false);
   busy(`Leggo ${file.name}…`, 0);
   let scans;
@@ -192,8 +217,10 @@ async function importFile(file, flsEntries) {
     );
   } catch (err) {
     busy(false);
-    alert(err.message);
-    return;
+    // scansione grande divisa su più ScanDataStream: si aggiunge il file mancante e riparte da sola
+    if (flsPartial && /incompleta/.test(err.message)) toast(err.message);
+    else alert(err.message);
+    return false;
   }
   busy(false);
   for (const sc of scans) {
@@ -205,7 +232,7 @@ async function importFile(file, flsEntries) {
       projectId: project.id,
       order: stations.length ? stations[stations.length - 1].order + 1 : 0,
       name: uniqueName(sc.name),
-      fileName: file.name,
+      fileName: flsEntries ? `${sc.name}.fls` : file.name,
       created: Date.now(),
       points: sc.count,
       rawPoints: sc.rawCount,
@@ -238,6 +265,7 @@ async function importFile(file, flsEntries) {
       if (settings.autoRegister) await register(true);
     }
   }
+  return true;
 }
 
 function uniqueName(n) {

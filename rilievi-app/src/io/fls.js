@@ -111,6 +111,8 @@ async function readMirror(blob, rows) {
 
 async function readOne(g, opts, onProgress) {
   const info = parseMain(await g.main.text());
+  // file scelti uno per uno (senza cartella): il nome viene dal Main, es. "add_" + 000
+  if (!g.name) g.name = `${info.attrs.ScanFileName || 'Scan_'}${String(+(info.attrs.ScanNum || 0)).padStart(3, '0')}`;
   const R = info.rows, NC = info.cols;
   if (!R || !NC) throw new Error(`${g.name}: metadati incompleti (NumRows/NumCols)`);
   const half = NC / 2;
@@ -198,7 +200,7 @@ async function readOne(g, opts, onProgress) {
     }
   }
   flushRev();
-  if (col < half) throw new Error(`${g.name}: scansione incompleta (${col} giri su ${half})`);
+  if (col < half) throw new Error(`${g.name}: scansione incompleta (${col} giri su ${half}): aggiungi anche ScanDataStream${g.streams.length}`);
   onProgress?.(1, g.name);
   const res = grid.result();
   return { name: g.name, ...res, info: { scanner: info.scanner, serial: info.serial, time: info.time, gps: info.gps, rows: R, cols: NC, tilt: info.scanAngle } };
