@@ -4,7 +4,7 @@ App per tablet Android (Huawei MatePad 11) che importa le scansioni del FARO Foc
 le decima, le registra una dopo l'altra mentre si rileva e mostra la nuvola unita.
 
 ## Stato
-- Formati letti: **FARO FLS grezzo** (cartella .fls come la scrive il Focus sulla SD, pulsante «Cartella FLS»), **E57**, PLY, PTS/XYZ. LGS: non ancora.
+- Formati letti: **FARO FLS grezzo** (cartella .fls come la scrive il Focus sulla SD, pulsante «Cartella FLS»: sul tablet apre il selettore di cartelle di Android tramite il plugin nativo `plugins/fls-folder`), **E57**, PLY, PTS/XYZ. LGS: non ancora.
   Il formato FLS è stato ricostruito senza SDK FARO: vedi `tools/fls-analisi/FLS-formato.md`.
 - Registrazione: ricerca automatica della posizione in pianta (correlazione FFT su una fascia orizzontale)
   + affinamento ICP punto-piano. Con scansioni livellate stima solo rotazione in pianta + spostamento.

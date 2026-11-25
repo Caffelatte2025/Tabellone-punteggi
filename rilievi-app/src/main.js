@@ -1,6 +1,8 @@
 import { Viewer } from './viewer.js';
 import * as store from './store.js';
 import { buildMergedPly, buildTransforms, saveFiles } from './export.js';
+import { Capacitor } from '@capacitor/core';
+import { FlsFolder } from 'rilievi-fls-folder';
 
 const $ = (s) => document.querySelector(s);
 const IDENT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -167,7 +169,40 @@ $('#btnNewProject').onclick = async () => {
 
 // ---------- import ----------
 $('#btnAdd').onclick = () => $('#fileInput').click();
-$('#btnAddFls').onclick = () => $('#dirInput').click();
+$('#btnAddFls').onclick = () => (Capacitor.isNativePlatform() ? pickFlsFolderNative() : $('#dirInput').click());
+
+// Sul tablet il selettore di file del WebView non sceglie cartelle: si usa il selettore di sistema
+// (plugin nativo plugins/fls-folder), che copia nella cache dell'app solo i file utili della scansione.
+async function pickFlsFolderNative() {
+  let res;
+  const sub = await FlsFolder.addListener('progress', (p) => busy(`Copio i file della scansione… ${Math.round(p.done / p.total * 100)}%`, p.done / p.total));
+  try {
+    busy('Scegli la cartella .fls (o la cartella che contiene le scansioni)…', 0);
+    res = await FlsFolder.pick();
+  } catch (err) {
+    busy(false);
+    sub.remove();
+    if (err?.code !== 'CANCELLED') alert(err.message || String(err));
+    return;
+  }
+  sub.remove();
+  busy(false);
+  if (!res.files?.length) {
+    alert(`Nella cartella «${res.root}» non trovo scansioni FLS: scegli una cartella che finisce con .fls (o quella che le contiene).`);
+    return;
+  }
+  try {
+    const entries = [];
+    for (const f of res.files) {
+      const blob = await (await fetch(Capacitor.convertFileSrc(f.local))).blob();
+      entries.push({ path: f.path, file: blob });
+    }
+    const roots = new Set(res.files.map((f) => (/(.*?[^/]+\.fls)\//i.exec(f.path) || [])[1]).filter(Boolean));
+    await importFile({ name: roots.size > 1 ? `${roots.size} scansioni FLS` : res.root }, entries);
+  } finally {
+    FlsFolder.clear().catch(() => {});
+  }
+}
 $('#fileInput').onchange = $('#dirInput').onchange = async (e) => {
   const files = [...e.target.files];
   e.target.value = '';

@@ -1,0 +1,15 @@
+{
+  "name": "rilievi-fls-folder",
+  "version": "0.1.0",
+  "description": "Plugin Capacitor locale: scelta di una cartella (Storage Access Framework) e copia dei file delle scansioni FARO .fls nella cache dell'app",
+  "private": true,
+  "main": "index.js",
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=8"
+  }
+}
