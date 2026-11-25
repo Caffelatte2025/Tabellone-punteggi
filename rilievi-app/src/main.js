@@ -165,18 +165,29 @@ $('#btnNewProject').onclick = async () => {
 
 // ---------- import ----------
 $('#btnAdd').onclick = () => $('#fileInput').click();
-$('#fileInput').onchange = async (e) => {
+$('#btnAddFls').onclick = () => $('#dirInput').click();
+$('#fileInput').onchange = $('#dirInput').onchange = async (e) => {
   const files = [...e.target.files];
   e.target.value = '';
-  for (const f of files) await importFile(f);
+  // i file di una cartella FARO .fls (Main, ScanDataStream*, MirrorIndex*.hls) si leggono insieme
+  const isFls = (f) => /\.fls[\\/]/i.test(f.webkitRelativePath || '') || /^(Main|ScanDataStream\d+|MirrorIndex[01]\.hls)$/.test(f.name);
+  const fls = files.filter(isFls);
+  for (const f of files) if (!isFls(f) && !/\.(jpg|jpeg|png|sha|sig)$/i.test(f.name) && f.name !== 'SHA256SUM') await importFile(f);
+  if (fls.length) {
+    const entries = fls.map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
+    const roots = [...new Set(entries.map((x) => (/(.*?[^/\\]+\.fls)[\\/]/i.exec(x.path) || [])[1]).filter(Boolean))];
+    const label = roots.length === 1 ? roots[0].split(/[\\/]/).pop() : roots.length ? `${roots.length} scansioni FLS` : 'scansione FLS';
+    await importFile({ name: label }, entries);
+  }
 };
 
-async function importFile(file) {
+async function importFile(file, flsEntries) {
   if (aligning) endAlign(false);
   busy(`Leggo ${file.name}…`, 0);
   let scans;
   try {
-    scans = await call('import', { file, opts: { voxel: settings.voxel, maxRange: settings.maxRange, minRange: 0.6 } }, (m) =>
+    const opts = { voxel: settings.voxel, maxRange: settings.maxRange, minRange: 0.6 };
+    scans = await call(flsEntries ? 'importFls' : 'import', flsEntries ? { entries: flsEntries, opts } : { file, opts }, (m) =>
       busy(`Leggo ${m.label && m.label !== file.name ? m.label : file.name}… ${Math.round(m.progress * 100)}%`, m.progress),
     );
   } catch (err) {
