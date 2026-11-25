@@ -1,0 +1,6 @@
+{
+  "appId": "it.rilievi.app",
+  "appName": "Rilievi",
+  "webDir": "dist",
+  "android": { "allowMixedContent": true }
+}

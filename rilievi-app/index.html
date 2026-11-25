@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#15181d" />
+    <title>Rilievi</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <button id="btnList" class="icon" title="Stazioni">☰</button>
+      <select id="selProject" title="Progetto"></select>
+      <button id="btnNewProject" title="Nuovo progetto">＋ Progetto</button>
+      <span class="spacer"></span>
+      <div class="seg" id="segView">
+        <button data-v="plan" class="on">Pianta</button>
+        <button data-v="3d">3D</button>
+      </div>
+      <select id="selColor" title="Colori">
+        <option value="station">Colore stazione</option>
+        <option value="intensity">Intensità</option>
+        <option value="rgb">Colori RGB</option>
+      </select>
+      <button id="btnExport">Esporta</button>
+      <button id="btnSettings" class="icon" title="Impostazioni">⚙</button>
+      <button id="btnAdd" class="primary">＋ Scansione</button>
+      <input id="fileInput" type="file" multiple hidden />
+    </header>
+
+    <div class="body">
+      <aside id="side">
+        <div class="side-head">
+          <b>Stazioni</b>
+          <span id="stationCount" class="muted"></span>
+        </div>
+        <ul id="stationList"></ul>
+        <div id="emptyHint" class="hint">
+          Aggiungi la prima scansione con <b>＋ Scansione</b>.<br /><br />
+          Formati letti ora: <b>E57</b>, PLY, PTS/XYZ.<br />
+          <span class="muted">LGS: in attesa dei file di esempio.</span>
+        </div>
+      </aside>
+      <main id="view">
+        <div id="viewTools">
+          <button id="btnFrame" title="Inquadra tutto">⤢</button>
+          <button id="btnSlice" class="on" title="Pianta: mostra solo la fascia dei muri">Sezione</button>
+        </div>
+      </main>
+    </div>
+
+    <div id="alignBar" hidden>
+      <div class="align-info">
+        <b id="alignTitle"></b>
+        <span id="alignStatus" class="muted">Trascina la scansione arancione sopra le altre (pianta). Due dita per ruotarla.</span>
+      </div>
+      <div class="align-btns">
+        <button data-rot="10">⟲ 10°</button>
+        <button data-rot="1">⟲ 1°</button>
+        <button data-rot="-1">⟳ 1°</button>
+        <button data-rot="-10">⟳ 10°</button>
+        <button id="btnAuto">Automatico</button>
+        <button id="btnRefine">Affina</button>
+        <button id="btnAccept" class="primary">Accetta</button>
+        <button id="btnCancelAlign">Più tardi</button>
+      </div>
+    </div>
+
+    <div id="busy" hidden>
+      <div class="busy-box">
+        <div id="busyLabel">Elaborazione…</div>
+        <div class="progress"><div id="busyBar"></div></div>
+      </div>
+    </div>
+
+    <div id="toast" hidden></div>
+
+    <dialog id="dlgSettings">
+      <form method="dialog">
+        <h3>Impostazioni</h3>
+        <label>Densità di lavoro (voxel)
+          <select name="voxel">
+            <option value="0.02">2 cm (pesante)</option>
+            <option value="0.03">3 cm</option>
+            <option value="0.05">5 cm (consigliato)</option>
+            <option value="0.1">10 cm (veloce)</option>
+          </select>
+        </label>
+        <label>Distanza massima dei punti dallo scanner (m)
+          <input name="maxRange" type="number" min="5" max="350" step="5" />
+        </label>
+        <label>Fascia della sezione in pianta, rispetto all'altezza scanner (m)
+          <span class="row"><input name="sliceLo" type="number" step="0.1" /> → <input name="sliceHi" type="number" step="0.1" /></span>
+        </label>
+        <label>Dimensione punti
+          <input name="pointSize" type="range" min="1" max="6" step="0.5" />
+        </label>
+        <label class="check"><input name="levelled" type="checkbox" /> Scansioni livellate (compensatore attivo): registra solo rotazione in pianta + spostamento</label>
+        <label class="check"><input name="autoRegister" type="checkbox" /> Registra automaticamente appena importata</label>
+        <p class="muted small">La densità vale per le scansioni importate da ora in poi.</p>
+        <div class="dlg-btns">
+          <button value="cancel">Annulla</button>
+          <button value="ok" class="primary">Salva</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlgStation">
+      <form method="dialog">
+        <h3 id="dsTitle"></h3>
+        <label>Nome <input name="name" /></label>
+        <p id="dsInfo" class="muted small"></p>
+        <div class="dlg-btns wrap">
+          <button value="delete" class="danger">Elimina</button>
+          <button value="realign">Ri-registra</button>
+          <button value="cancel">Chiudi</button>
+          <button value="ok" class="primary">Salva</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

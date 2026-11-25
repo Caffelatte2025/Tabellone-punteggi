@@ -1,0 +1,49 @@
+name: Rilievi - APK Android
+
+on:
+  push:
+    branches: [claude/app-gestione-rilievi-lgs-kh6ogo]
+    paths: ['rilievi-app/**', '.github/workflows/rilievi-apk.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rilievi-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: rilievi-app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap add android
+      - run: npx cap sync android
+      - name: Compila APK
+        working-directory: rilievi-app/android
+        run: ./gradlew assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk Rilievi.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Rilievi-apk
+          path: rilievi-app/Rilievi.apk
+      - name: Pubblica come release (link diretto per il tablet)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rilievi-apk
+          name: Rilievi - ultima versione APK
+          prerelease: true
+          make_latest: false
+          body: "APK di prova dell'app Rilievi, compilata dal branch claude/app-gestione-rilievi-lgs-kh6ogo (commit ${{ github.sha }})."
+          files: rilievi-app/Rilievi.apk
