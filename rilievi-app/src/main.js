@@ -3,6 +3,8 @@ import * as store from './store.js';
 import { buildMergedPly, buildTransforms, saveFiles } from './export.js';
 import { Capacitor } from '@capacitor/core';
 import { FlsFolder } from 'rilievi-fls-folder';
+import { BUILD, checkUpdate, canSelfUpdate, downloadAndInstall } from './update.js';
+import { openPairAlign } from './pairalign.js';
 
 const $ = (s) => document.querySelector(s);
 const IDENT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -92,6 +94,7 @@ function renderList() {
       if (e.target.closest('.more')) return openStationDialog(s);
       selectStation(s.id, true);
       if (!isReg(s)) startAlign(s.id);
+      if (window.innerWidth < 1600) showSide(false); // libera la vista
     };
     ul.appendChild(li);
   });
@@ -141,6 +144,7 @@ async function openProject(p) {
   viewer.frameAll();
   activeId = null;
   renderList();
+  showSide(stations.length === 0);
   const pend = stations.find((s) => !isReg(s));
   if (pend) toast(`${stations.filter((s) => !isReg(s)).length} stazioni da registrare: toccale nella lista`);
 }
@@ -277,10 +281,13 @@ async function importFile(file, flsEntries, flsPartial = false) {
       matrix: first ? IDENT.slice() : (lastReg ? lastReg.matrix.slice() : IDENT.slice()),
       rms: null,
       overlap: null,
+      hasPano: !!sc.pano,
+      gps: sc.info?.gps || null,
     };
     const cloud = { positions: sc.positions, intensity: sc.intensity, colors: sc.colors };
     try {
       await store.saveCloud(s.id, cloud);
+      if (sc.pano) await store.savePano(s.id, sc.pano);
       await store.saveStation(s);
     } catch (err) {
       alert(`Impossibile salvare sul tablet: ${err.message}`);
@@ -329,6 +336,8 @@ function startAlign(id) {
     updateAlignInfo();
   });
   $('#alignBar').hidden = false;
+  document.body.classList.add('aligning');
+  showSide(false);
   updateAlignInfo();
 }
 
@@ -357,6 +366,7 @@ function endAlign(keep) {
   viewer.setAlign(null);
   aligning = null;
   $('#alignBar').hidden = true;
+  document.body.classList.remove('aligning');
   renderList();
 }
 
@@ -383,12 +393,41 @@ function targetData(excludeId) {
   return { positions: out.subarray(0, o), key };
 }
 
+// GPS dello scanner (pochi metri di errore) come vincolo per la ricerca automatica
+const enu = (o, g) => [(g.lon - o.lon) * 111320 * Math.cos((o.lat * Math.PI) / 180), (g.lat - o.lat) * 111320];
+function gpsPrior(s) {
+  const ok = (x) => x.gps && x.gps.fix > 0 && Number.isFinite(x.gps.lat);
+  if (!ok(s)) return null;
+  const regs = stations.filter((x) => x.id !== s.id && isReg(x) && ok(x));
+  if (!regs.length) return null;
+  // orientamento del progetto rispetto al nord: confronta le posizioni registrate con quelle GPS
+  let cs = 0, sn = 0;
+  for (let i = 0; i < regs.length; i++)
+    for (let j = i + 1; j < regs.length; j++) {
+      const a = regs[i], b = regs[j];
+      const e = enu(a.gps, b.gps), dl = [b.matrix[12] - a.matrix[12], b.matrix[13] - a.matrix[13]];
+      const L = Math.hypot(...e), Ld = Math.hypot(...dl);
+      if (L < 4 || Ld < 4 || Math.abs(L - Ld) > 8) continue;
+      const ang = Math.atan2(dl[1], dl[0]) - Math.atan2(e[1], e[0]), w = Math.min(L, Ld);
+      cs += w * Math.cos(ang); sn += w * Math.sin(ang);
+    }
+  const ref = regs.reduce((a, b) => (Math.hypot(...enu(a.gps, s.gps)) <= Math.hypot(...enu(b.gps, s.gps)) ? a : b));
+  const e = enu(ref.gps, s.gps);
+  if (cs || sn) {
+    const h = Math.atan2(sn, cs);
+    const x = ref.matrix[12] + Math.cos(h) * e[0] - Math.sin(h) * e[1], y = ref.matrix[13] + Math.sin(h) * e[0] + Math.cos(h) * e[1];
+    return { init: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, ref.matrix[14], 1], nearRadius: 7, text: 'posizione da GPS' };
+  }
+  return { ring: { x: ref.matrix[12], y: ref.matrix[13], r: Math.hypot(...e), tol: 6 }, text: `a ${Math.hypot(...e).toFixed(0)} m da ${ref.name} (GPS)` };
+}
+
 async function register(coarse) {
   const s = stations.find((x) => x.id === aligning?.id);
   if (!s) return;
+  const prior = coarse ? gpsPrior(s) : null;
   const { positions, key } = targetData(s.id);
   const cached = await call('needTarget', { targetKey: key });
-  busy(coarse ? 'Ricerca automatica della posizione…' : 'Affino…', 0);
+  busy(coarse ? `Ricerca automatica della posizione${prior ? ` (${prior.text})` : ''}…` : 'Affino…', 0);
   try {
     const res = await call(
       'register',
@@ -396,8 +435,11 @@ async function register(coarse) {
         targetKey: key,
         targetPositions: cached ? null : positions,
         source: clouds.get(s.id).positions,
-        init: s.matrix,
-        opts: { voxel: Math.max(s.voxel, settings.voxel), levelled: settings.levelled, coarse, startDist: coarse ? 1.0 : 0.6, sliceLow: settings.sliceLo, sliceHigh: settings.sliceHi },
+        init: prior?.init || s.matrix,
+        opts: {
+          voxel: Math.max(s.voxel, settings.voxel), levelled: settings.levelled, coarse, startDist: coarse ? 1.0 : 0.6,
+          sliceLow: settings.sliceLo, sliceHigh: settings.sliceHi, nearRadius: prior?.nearRadius, ring: prior?.ring,
+        },
       },
       (m) => {
         busy(m.label, m.progress);
@@ -419,6 +461,40 @@ async function register(coarse) {
 
 document.querySelectorAll('[data-rot]').forEach((b) => (b.onclick = () => viewer.rotateAligned(+b.dataset.rot)));
 $('#btnAuto').onclick = () => register(true);
+$('#btnPoints').onclick = async () => {
+  const s = stations.find((x) => x.id === aligning?.id);
+  if (!s) return;
+  const refsSt = stations.filter((x) => x.id !== s.id && isReg(x) && x.hasPano);
+  if (!s.hasPano) return alert('Questa stazione non ha il panorama 360°: è disponibile solo per le scansioni FLS importate con questa versione dell\'app (reimportala).');
+  if (!refsSt.length) return alert('Serve una stazione già registrata con panorama 360° (scansione FLS importata con questa versione).');
+  busy('Apro i panorami…', 0);
+  try {
+    // proposta: la stazione registrata più vicina alla posizione attuale
+    const d = (x) => Math.hypot(x.matrix[12] - s.matrix[12], x.matrix[13] - s.matrix[13]);
+    refsSt.sort((a, b) => d(a) - d(b));
+    const refs = [];
+    for (const r of refsSt) refs.push({ station: r, pano: await store.loadPano(r.id) });
+    const cur = { station: s, pano: await store.loadPano(s.id) };
+    busy(false);
+    openPairAlign({
+      refs: refs.filter((r) => r.pano),
+      cur,
+      levelled: settings.levelled,
+      onApply: async (m, refine, sol) => {
+        s.matrix = m;
+        s.rms = null; s.overlap = null;
+        viewer.setMatrix(s.id, m);
+        await store.saveStation(s);
+        toast(`Posizione da ${sol.residuals.length} coppie di punti (scarto ${(sol.rms * 100).toFixed(1)} cm)`);
+        if (refine) await register(false);
+        else updateAlignInfo();
+      },
+    });
+  } catch (err) {
+    busy(false);
+    alert(`Impossibile aprire i panorami: ${err.message}`);
+  }
+};
 $('#btnRefine').onclick = () => register(false);
 $('#btnAccept').onclick = async () => {
   const s = stations.find((x) => x.id === aligning?.id);
@@ -492,7 +568,11 @@ $('#btnSlice').onclick = (e) => {
   e.currentTarget.classList.toggle('on', on);
   viewer.setSlice({ enabled: on });
 };
-$('#btnList').onclick = () => $('#side').classList.toggle('hidden');
+// elenco stazioni a cassetto sopra la vista: ☰ lo apre/chiude, toccando la vista si richiude
+function showSide(on) { $('#side').classList.toggle('hidden', !on); }
+$('#btnList').onclick = () => showSide($('#side').classList.contains('hidden'));
+$('#btnCloseSide').onclick = () => showSide(false);
+$('#view').addEventListener('pointerdown', () => { if (stations.length) showSide(false); });
 
 // ---------- impostazioni ----------
 $('#btnSettings').onclick = () => {
@@ -546,6 +626,37 @@ $('#btnExport').onclick = async () => {
   }
   busy(false);
 };
+
+// ---------- aggiornamenti ----------
+async function updateFlow(manual) {
+  if (!canSelfUpdate()) { if (manual) toast(`Build ${BUILD || 'di sviluppo'}: l'aggiornamento automatico funziona nell'app sul tablet`); return; }
+  let u;
+  try {
+    u = await checkUpdate();
+  } catch (err) {
+    if (manual) alert(`Non riesco a controllare gli aggiornamenti: ${err.message}`);
+    return;
+  }
+  if (!u.newer) { if (manual) toast(`L'app è aggiornata (build ${u.current})`); return; }
+  const bar = $('#updateBar');
+  $('#updateText').textContent = `Nuova versione disponibile: build ${u.latest} (installata: ${u.current}).`;
+  bar.hidden = false;
+  $('#btnUpdateNow').onclick = async () => {
+    busy('Scarico l\'aggiornamento…', 0);
+    try {
+      await downloadAndInstall(u.url, (f, p) => busy(`Scarico l'aggiornamento… ${(p.done / 1048576).toFixed(1)} MB`, f));
+      busy(false);
+      toast('Conferma l\'installazione nella finestra di Android: progetti e stazioni restano');
+    } catch (err) {
+      busy(false);
+      alert(err.message || String(err));
+    }
+  };
+  $('#btnUpdateLater').onclick = () => (bar.hidden = true);
+}
+$('#btnCheckUpdate').onclick = () => updateFlow(true);
+$('#buildInfo').textContent = `Versione: build ${BUILD || 'di sviluppo'}`;
+if (navigator.onLine !== false) setTimeout(() => updateFlow(false), 2500);
 
 // richiede memoria persistente così Android non cancella i dati del progetto
 navigator.storage?.persist?.().catch(() => {});

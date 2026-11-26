@@ -31,16 +31,15 @@
     </header>
 
     <div class="body">
-      <aside id="side">
+      <aside id="side" class="hidden">
         <div class="side-head">
           <b>Stazioni</b>
           <span id="stationCount" class="muted"></span>
+          <button id="btnCloseSide" class="icon small-icon" title="Chiudi">✕</button>
         </div>
         <ul id="stationList"></ul>
         <div id="emptyHint" class="hint">
-          Aggiungi la prima scansione con <b>＋ Scansione</b>.<br /><br />
-          Formati letti ora: <b>E57</b>, PLY, PTS/XYZ.<br />
-          <span class="muted">LGS: in attesa dei file di esempio.</span>
+          Aggiungi la prima scansione con <b>＋ Cartella FLS</b> (cartella .fls del Focus) o <b>＋ Scansione</b> (E57, PLY, PTS/XYZ).
         </div>
       </aside>
       <main id="view">
@@ -62,6 +61,7 @@
         <button data-rot="-1">⟳ 1°</button>
         <button data-rot="-10">⟳ 10°</button>
         <button id="btnAuto">Automatico</button>
+        <button id="btnPoints">Punti</button>
         <button id="btnRefine">Affina</button>
         <button id="btnAccept" class="primary">Accetta</button>
         <button id="btnCancelAlign">Più tardi</button>
@@ -76,6 +76,12 @@
     </div>
 
     <div id="toast" hidden></div>
+
+    <div id="updateBar" hidden>
+      <span id="updateText"></span>
+      <button id="btnUpdateNow" class="primary">Aggiorna ora</button>
+      <button id="btnUpdateLater">Più tardi</button>
+    </div>
 
     <dialog id="dlgSettings">
       <form method="dialog">
@@ -100,6 +106,7 @@
         <label class="check"><input name="levelled" type="checkbox" /> Scansioni livellate (compensatore attivo): registra solo rotazione in pianta + spostamento</label>
         <label class="check"><input name="autoRegister" type="checkbox" /> Registra automaticamente appena importata</label>
         <p class="muted small">La densità vale per le scansioni importate da ora in poi.</p>
+        <div class="row"><span id="buildInfo" class="muted small" style="flex:1"></span><button type="button" id="btnCheckUpdate">Controlla aggiornamenti</button></div>
         <div class="dlg-btns">
           <button value="cancel">Annulla</button>
           <button value="ok" class="primary">Salva</button>

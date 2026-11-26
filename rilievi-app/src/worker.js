@@ -4,7 +4,7 @@ import { readE57 } from './io/e57.js';
 import { readPly, readXyz } from './io/ascii.js';
 import { readFls } from './io/fls.js';
 import { buildTarget, icp } from './reg/icp.js';
-import { coarseSearch } from './reg/coarse.js';
+import { autoRegister } from './reg/auto.js';
 
 let cachedTarget = null; // { key, target }
 
@@ -15,7 +15,10 @@ self.onmessage = async (e) => {
     if (type === 'importFls') {
       const scans = await readFls(e.data.entries, e.data.opts, progress);
       const transfer = [];
-      for (const s of scans) transfer.push(s.positions.buffer, s.intensity.buffer);
+      for (const s of scans) {
+        transfer.push(s.positions.buffer, s.intensity.buffer);
+        if (s.pano) transfer.push(s.pano.grey.buffer, s.pano.range.buffer);
+      }
       self.postMessage({ id, type: 'done', result: scans }, transfer);
     } else if (type === 'import') {
       const { file, opts } = e.data;
@@ -39,14 +42,12 @@ self.onmessage = async (e) => {
         progress(0, 'Preparo i dati di riferimento…');
         cachedTarget = { key: targetKey, target: buildTarget(targetPositions) };
       }
-      let start = init;
-      if (opts.coarse) {
-        progress(0.05, 'Ricerca automatica della posizione…');
-        start = coarseSearch(cachedTarget.target, source, init, opts, (p) => progress(0.05 + p * 0.6, 'Ricerca automatica della posizione…'));
-      }
-      const res = icp(cachedTarget.target, source, start, opts, (it) =>
-        self.postMessage({ id, type: 'progress', progress: Math.min(0.99, 0.65 + it.iter / (opts.maxIter ?? 60) * 0.35), label: `Affino… scarto ${(it.rms * 1000).toFixed(0)} mm`, matrix: it.matrix }),
-      );
+      const onIter = (it) =>
+        self.postMessage({ id, type: 'progress', progress: Math.min(0.99, (opts.coarse ? 0.82 : 0) + (it.iter / (opts.maxIter ?? 60)) * (opts.coarse ? 0.17 : 0.99)), label: `Affino… scarto ${(it.rms * 1000).toFixed(0)} mm`, matrix: it.matrix });
+      // automatico: candidati dalla ricerca in pianta (eventualmente vincolata dal GPS) verificati con ICP
+      const res = opts.coarse
+        ? autoRegister(cachedTarget.target, source, init, { ...opts, onIter }, progress)
+        : icp(cachedTarget.target, source, init, opts, onIter);
       self.postMessage({ id, type: 'done', result: res });
     } else if (type === 'needTarget') {
       self.postMessage({ id, type: 'done', result: !!cachedTarget && cachedTarget.key === e.data.targetKey });

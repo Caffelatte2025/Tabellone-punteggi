@@ -6,13 +6,17 @@ let dbp = null;
 function db() {
   if (!dbp) {
     dbp = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB, 1);
-      req.onupgradeneeded = () => {
+      const req = indexedDB.open(DB, 2);
+      req.onupgradeneeded = (e) => {
         const d = req.result;
-        d.createObjectStore('projects', { keyPath: 'id' });
-        const st = d.createObjectStore('stations', { keyPath: 'id' });
-        st.createIndex('project', 'projectId');
-        d.createObjectStore('clouds', { keyPath: 'id' });
+        if (e.oldVersion < 1) {
+          d.createObjectStore('projects', { keyPath: 'id' });
+          const st = d.createObjectStore('stations', { keyPath: 'id' });
+          st.createIndex('project', 'projectId');
+          d.createObjectStore('clouds', { keyPath: 'id' });
+        }
+        // v2: panorami 360° delle stazioni FLS (per l'allineamento a punti)
+        if (!d.objectStoreNames.contains('panos')) d.createObjectStore('panos', { keyPath: 'id' });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -49,11 +53,12 @@ export async function saveProject(p) {
 
 export async function deleteProject(id) {
   const stations = await listStations(id);
-  return tx(['projects', 'stations', 'clouds'], 'readwrite', (t) => {
+  return tx(['projects', 'stations', 'clouds', 'panos'], 'readwrite', (t) => {
     t.objectStore('projects').delete(id);
     for (const s of stations) {
       t.objectStore('stations').delete(s.id);
       t.objectStore('clouds').delete(s.id);
+      t.objectStore('panos').delete(s.id);
     }
   });
 }
@@ -76,8 +81,17 @@ export async function loadCloud(id) {
 }
 
 export async function deleteStation(id) {
-  return tx(['stations', 'clouds'], 'readwrite', (t) => {
+  return tx(['stations', 'clouds', 'panos'], 'readwrite', (t) => {
     t.objectStore('stations').delete(id);
     t.objectStore('clouds').delete(id);
+    t.objectStore('panos').delete(id);
   });
+}
+
+export async function savePano(id, pano) {
+  return tx(['panos'], 'readwrite', (t) => { t.objectStore('panos').put({ id, ...pano }); });
+}
+
+export async function loadPano(id) {
+  return tx(['panos'], 'readonly', (t) => req2p(t.objectStore('panos').get(id)));
 }

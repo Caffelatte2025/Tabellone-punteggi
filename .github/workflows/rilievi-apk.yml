@@ -28,10 +28,51 @@ jobs:
           java-version: 21
       - run: npm ci
       - run: npm run build
+        env:
+          RILIEVI_BUILD: ${{ github.run_number }}
       - run: npx cap add android
       - run: npx cap sync android
+      - name: Versione e firma fissa (così l'APK nuovo si installa sopra il vecchio)
+        env:
+          KS_B64: ${{ secrets.RILIEVI_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.RILIEVI_KEYSTORE_PASSWORD }}
+        run: |
+          cat >> android/app/build.gradle <<'EOF'
+
+          android {
+              defaultConfig {
+                  versionCode Integer.parseInt(System.getenv('RILIEVI_BUILD') ?: '1')
+                  versionName '1.' + (System.getenv('RILIEVI_BUILD') ?: '0')
+              }
+          }
+          EOF
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/rilievi.p12"
+            cat >> android/app/build.gradle <<'EOF'
+
+          android {
+              signingConfigs {
+                  rilievi {
+                      storeFile file(System.getenv('RILIEVI_KS'))
+                      storePassword System.getenv('RILIEVI_KS_PASS')
+                      keyAlias 'rilievi'
+                      keyPassword System.getenv('RILIEVI_KS_PASS')
+                      storeType 'pkcs12'
+                  }
+              }
+              buildTypes { debug { signingConfig signingConfigs.rilievi } }
+          }
+          EOF
+            echo "Firma: chiave fissa Rilievi"
+          else
+            echo "::warning::Segreto RILIEVI_KEYSTORE_B64 assente: APK firmato con chiave di debug casuale (per aggiornare va disinstallato)"
+          fi
       - name: Compila APK
         working-directory: rilievi-app/android
+        env:
+          RILIEVI_BUILD: ${{ github.run_number }}
+          RILIEVI_KS: ${{ runner.temp }}/rilievi.p12
+          RILIEVI_KS_PASS: ${{ secrets.RILIEVI_KEYSTORE_PASSWORD }}
         run: ./gradlew assembleDebug --no-daemon
       - run: cp android/app/build/outputs/apk/debug/app-debug.apk Rilievi.apk
       - uses: actions/upload-artifact@v4
@@ -45,5 +86,5 @@ jobs:
           name: Rilievi - ultima versione APK
           prerelease: true
           make_latest: false
-          body: "APK di prova dell'app Rilievi, compilata dal branch claude/app-gestione-rilievi-lgs-kh6ogo (commit ${{ github.sha }})."
+          body: "APK di prova dell'app Rilievi, build ${{ github.run_number }}, compilata dal branch claude/app-gestione-rilievi-lgs-kh6ogo (commit ${{ github.sha }}). [build:${{ github.run_number }}]"
           files: rilievi-app/Rilievi.apk

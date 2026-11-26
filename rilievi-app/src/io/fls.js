@@ -75,6 +75,8 @@ export function parseMain(text) {
     distFactor: num('ScanDistFactor', 0.073171531), // mm per unita'
     distOffset: num('ScanDistOffset', 0),
     scanAxis: vec('ScanAxis'),
+    laserOffset: vec('LaserOffset'),
+    sensorDistOffset: num('DistOffset', 0),
     scanAngle: num('ScanAngle', 0),
     gps: parseNmea(attrs.GPSNMEA),
     scanner: attrs.ScannerType || attrs.ScannerModel || '',
@@ -115,7 +117,7 @@ async function readOne(g, opts, onProgress) {
   if (!g.name) g.name = `${info.attrs.ScanFileName || 'Scan_'}${String(+(info.attrs.ScanNum || 0)).padStart(3, '0')}`;
   const R = info.rows, NC = info.cols;
   if (!R || !NC) throw new Error(`${g.name}: metadati incompleti (NumRows/NumCols)`);
-  const half = NC / 2;
+  const half = Math.ceil(NC / 2); // giri dello specchio (con NumCols dispari le due metà differiscono di una colonna)
   const m0 = await readMirror(g.mi0, R), m1 = await readMirror(g.mi1, R);
 
   // encoder -> (meta', riga); campione k = encoder/16
@@ -132,29 +134,50 @@ async function readOne(g, opts, onProgress) {
     cosE[1][r] = Math.cos(m1.el[r]); sinE[1][r] = Math.sin(m1.el[r]);
   }
   // segno verificato registrando add_000/add_001: con -1 lo scarto ICP scende da 61 a 48 mm
-  const rot = tiltRotation(info.scanAxis, info.scanAngle, opts.levelSign ?? -1);
+  const ax = info.scanAxis && opts.levelAxisFlip ? [info.scanAxis[0] * opts.levelAxisFlip[0], info.scanAxis[1] * opts.levelAxisFlip[1], info.scanAxis[2]] : info.scanAxis;
+  const rot = tiltRotation(ax, info.scanAngle, opts.levelSign ?? -1);
   const grid = new VoxelGrid(opts.voxel ?? 0.05, opts.maxRange ?? 60, opts.minRange ?? 0.6);
   const F = info.distFactor / 1000, OFF = info.distOffset || 0;
   const minR = opts.minRange ?? 0.6;
+  // modello geometrico: costante di distanza e posizione di uscita del raggio (dal Main, sezione SensorField)
+  const lo = info.laserOffset || [0, 0, 0];
+  const gs = opts.geomSigns || { d: 0, f: 0, l: 0, u: 0 };
+  const G = { dOff: gs.d * (info.sensorDistOffset || 0), f: gs.f * lo[0], l: gs.l * lo[1], u: gs.u * lo[2] };
 
   const dist = new Float64Array(SPR), amp = new Int32Array(SPR), flag = new Uint8Array(SPR);
   const st = { A: 0, B: 0 };
+  // panorama 360° a metà risoluzione: intensità (per vedere) e distanza in mm (per prendere i punti)
+  const PS = opts.panoStep ?? 2;
+  const HP = Math.ceil(half / PS), PW = 2 * HP, PH = Math.ceil(R / PS); // HP: larghezza in pixel di ogni metà
+  const pano = opts.pano === false ? null : { w: PW, h: PH, step: PS, cols: NC, halfPx: HP, grey: new Uint8Array(PW * PH), range: new Uint16Array(PW * PH) };
   let col = 0;
   const decodeRev = (bytes) => {
     const n = decodeSamples(bytes, st, dist, amp, flag, F, OFF);
     if (col < half) {
       const az = -col * 2 * Math.PI / NC;
       const ca = [Math.cos(az), Math.cos(az + Math.PI)], sa = [Math.sin(az), Math.sin(az + Math.PI)];
+      const inPano = pano && col % PS === 0;
       for (let k = 1; k < n - 1; k++) {
         const r = rowOf[k];
         if (r < 0) continue;
         const d = dist[k];
+        const h = halfOf[k];
+        if (inPano && r % PS === 0) {
+          const px = h * HP + col / PS, py = r / PS;
+          if (px < PW) pano.grey[py * PW + px] = Math.round(ampToIntensity(amp[k]) * 255);
+        }
         if (!(d > minR) || flag[k]) continue;
         const tol = 0.02 + 0.02 * d; // coerenza con i campioni vicini: scarta il rumore del cielo
         if (Math.abs(dist[k - 1] - d) > tol || Math.abs(dist[k + 1] - d) > tol) continue;
-        const h = halfOf[k];
-        const xy = d * cosE[h][r];
-        let x = xy * ca[h], y = xy * sa[h], z = d * sinE[h][r];
+        if (inPano && r % PS === 0 && d < 65.5) {
+          const px = h * HP + col / PS;
+          if (px < PW) pano.range[(r / PS) * PW + px] = Math.round(d * 1000);
+        }
+        const dc = d + G.dOff;
+        const xy = dc * cosE[h][r];
+        let x = xy * ca[h], y = xy * sa[h], z = dc * sinE[h][r];
+        // il raggio esce da un punto fuori dall'asse verticale (LaserOffset, nel sistema della testa)
+        x += G.f * ca[0] - G.l * sa[0]; y += G.f * sa[0] + G.l * ca[0]; z += G.u;
         if (rot) { const X = rot[0] * x + rot[1] * y + rot[2] * z, Y = rot[3] * x + rot[4] * y + rot[5] * z, Z = rot[6] * x + rot[7] * y + rot[8] * z; x = X; y = Y; z = Z; }
         grid.add(x, y, z, ampToIntensity(amp[k]));
       }
@@ -203,7 +226,13 @@ async function readOne(g, opts, onProgress) {
   if (col < half) throw new Error(`${g.name}: scansione incompleta (${col} giri su ${half}): aggiungi anche ScanDataStream${g.streams.length}`);
   onProgress?.(1, g.name);
   const res = grid.result();
-  return { name: g.name, ...res, info: { scanner: info.scanner, serial: info.serial, time: info.time, gps: info.gps, rows: R, cols: NC, tilt: info.scanAngle } };
+  if (pano) {
+    // angoli verticali delle righe del panorama (le due metà dello specchio hanno tabelle leggermente diverse)
+    pano.el0 = new Float32Array(PH); pano.el1 = new Float32Array(PH);
+    for (let py = 0; py < PH; py++) { pano.el0[py] = m0.el[py * PS]; pano.el1[py] = m1.el[py * PS]; }
+    pano.rot = rot ? Float64Array.from(rot) : null;
+  }
+  return { name: g.name, ...res, pano, info: { scanner: info.scanner, serial: info.serial, time: info.time, gps: info.gps, rows: R, cols: NC, tilt: info.scanAngle } };
 }
 
 // Intensita' 0..1 dall'ampiezza (taratura sull'anteprima $GRV$ dello scanner: grv ~ 0.069*B - 18)
